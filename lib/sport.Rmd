@@ -1,0 +1,475 @@
+---
+title: "Effectiveness of NBA Time-out"
+author: "Chenying Gao, Renfei Shang, Jadie Zuo"
+date: "April 17th, 2016"
+output: html_document
+---
+In this project, we conduct exploratory data analysis using play-by-play data set for all games from 2011-2012 season. Specifically, attention is paid on time-out usage. Interesting facts about time-out in NBA games are revealed from various aspects. Additionally, we develop insights on the effectivenees of time-out in the short term. Addionally, an attemp to test whether Hack-a-Shaq strategy works or not by Monte Carlo Simulation is made. Using data set orignized for players, we estimate the parameters for score, which is fitted by a compound Poisson Process.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+###Enviroment Set up
+```{r,warning=FALSE}
+library(stringr)
+library(reshape)
+library(ggplot2)
+```
+###Data Preparation
+```{r,echo=FALSE}
+load("data_new.RData")
+load("mydata.RData")
+load("data_tim.RData")
+```
+
+```{r,eval=FALSE}
+mydata <- read.csv("Workbook1.csv")
+```
+
+```{r}
+dim(mydata)
+head(mydata)
+length(unique(mydata$GameID))
+```
+Our data contains 427893 observations with each observation being one game event such as making a shot, fouling, or requesting a time-out. There are 978 games in total.
+```{r,eval=FALSE}
+#Create a time variable
+mydata$time <- as.numeric(mydata$TimeRemaining)
+mydata$time <- mydata$time[1] - mydata$time
+#Creat score varables
+mydata$sub <- sub(".*\\[(.*)\\].*", "\\1", mydata$Entry, perl=TRUE)
+mydata$team <- substr(mydata$sub,1,3)
+mydata$test <- substr(mydata$sub,4,5)
+data_new <- mydata[which(mydata$test!=""),]
+data_new$score <- substr(data_new$sub,4,11)
+data_new$score <- strsplit(data_new$score,split = "-")
+for (i in 1:dim(data_new)[1]) {
+  data_new$score1[i] <- data_new$score[[i]][1]
+  data_new$score2[i] <- data_new$score[[i]][2]
+}
+data_new <- data_new[,c(1,5,7,10,11)]
+data_new$id <- substr(data_new$GameID,9,11)
+for (i in 1:dim(data_new)[1]) {
+  if (data_new$team[i]==data_new$id[i]) {
+    data_new$s1[i] <- data_new$score1[i]
+    data_new$s2[i] <- data_new$score2[i]
+  }
+  else{
+    data_new$s1[i] <- data_new$score2[i]
+    data_new$s2[i] <- data_new$score1[i]
+  }
+}
+data_new <- data_new[,c(1,2,3,6,7,8)]
+```
+
+```{r}
+dim(data_new)
+head(data_new)
+```
+This is a data set contains all the events for scoring. Variables includ GameID, time, team that initiats the evnt, team idetification number, and scores for both teams.
+```{r,eval=FALSE}
+#Creat binary varaibles time-out1 and time-out2 that symbolize the time-out requests for team 1 and 2. 
+mydata$id <- substr(mydata$GameID,9,11)
+mydata$time_out1 <- rep(0,dim(mydata)[1])
+mydata$time_out2 <- rep(0,dim(mydata)[1])
+for (i in 1:dim(mydata)[1]) {
+  if(sapply("Timeout", grepl,mydata$Entry[i])==TRUE){
+    if (mydata$team[i]==mydata$id[i]){
+      mydata$time_out1[i] <- 1
+    }
+    if (mydata$team[i] != mydata$id[i]){
+      mydata$time_out2[i] <- 1
+    }
+  }
+}
+```
+
+```{r}
+#Collecting data for timeout into a new data set data_tim
+data_tim <- mydata[c(which(mydata$time_out1==1),which(mydata$time_out2==1)),]
+data_tim$time <- 3454 - data_tim$time
+data_tim <- data_tim[order(data_tim$GameID,data_tim$time),] 
+dim(data_tim)
+head(data_tim)
+#Delete rows represent ends of quarters
+data_new <- data_new[which(data_new$time != 0),]
+data_new <- data_new[which(data_new$time != 2735),]
+data_new <- data_new[which(data_new$time != 2016),]
+data_new <- data_new[which(data_new$time != 1297),]
+data_new <- data_new[which(data_new$time != 578),]
+dim(data_new)
+
+data1 <- data.frame(data_tim[,c(1,5,7,9,10,11)],s1=rep("NA",dim(data_tim)[1]),s2 = rep("NA",dim(data_tim)[1]))
+data2 <- data.frame(data_new$GameID,data_new$time,data_new$team,data_new$id,
+                       time_out1=rep(0,dim(data_new)[1]),time_out2=rep(0,dim(data_new)[1]),data_new$s1,data_new$s2)
+colnames(data2) <-c("GameID","time","team","id","time_out1","time_out2","s1","s2")
+#Combining data_new and data_tim
+data_use <- rbind(data1,data2)
+data_use <- data_use[order(data_use$GameID,data_use$time),]
+```
+
+```{r,eval=FALSE}
+#Read game score for timeout
+for (i in 1:dim(data_use)[1]) {
+  if (data_use$time_out1[i] == 1) {
+    data_use$s1[i] = data_use$s1[i-1]
+    data_use$s2[i] = data_use$s2[i-1]
+  } 
+  if (data_use$time_out2[i] == 1) {
+    data_use$s1[i] = data_use$s1[i-1]
+    data_use$s2[i] = data_use$s2[i-1]
+  }
+}
+data_use <- data_use[which(data_use$s1 != "NA"),]
+```
+
+```{r,echo=FALSE}
+load("data_use.RData")
+```
+
+```{r}
+dim(data_use)
+head(data_use)
+```
+This is the final data that is used for our analysis. It contains 115261 rows that combine score event and time-out request event. Variables include Game IDs (made up of date of the game and team names), time (in second with start point being the 0), team (team name that initialize the event), time-out1 (binary variable with 1 representing a time-out request by team 1), time-out 2 with 1 representing a time-out request by team 2),s1 (score of team 1), and s2 (score of team 2).
+  
+###Plots  
+1. Bar plot shows the overall distribution of timeout against difference of scores between two teams:
+```{r,warning=FALSE}
+p1 <- data_use[which(data_use$time_out1 != 0),]
+p2 <- data_use[which(data_use$time_out2 != 0),]
+p <- rbind(p1,p2)
+p <- p[order(p$GameID, p$time),]
+p$s1 <- as.numeric(as.character(p$s1))
+p$s2 <- as.numeric(as.character(p$s2))
+for (i in 1:dim(p)[1]){
+  if(p$time_out1[i] == 1) {
+    p$diff[i] = p$s1[i] - p$s2[i]
+  }
+  if(p$time_out2[i] == 1) {
+    p$diff[i] = p$s2[i] - p$s1[i]
+  }
+}
+p1 <- p[which(p$time_out1==1),]
+p2 <- p[which(p$time_out2==1),]
+p$time_out <- rep(0,dim(p)[1])
+p$time_out[which(p$time_out1==1)] =1
+
+ggplot(p, aes(diff,group=time_out)) + 
+  geom_bar(aes(colour=time_out, fill=time_out), binwidth=1, alpha=0.9) +
+  xlab("Difference of Score") + ylab("Count") + 
+  ggtitle("Timeout Score Difference") 
+```
+Possible reasons for this perfect normal distribution: large sample size, the fact that time-out opportunity is not culmulative.  
+  
+2. Bar plot shows the overall distribution of time-out against time: 
+```{r}
+ggplot(p, aes(time,group=time_out)) + 
+  geom_bar(aes(colour=time_out, fill=time_out), binwidth=1, alpha=0.9) +
+  xlab("Time") + ylab("Count") + 
+  ggtitle("Distribution of Timeouts") 
+```
+  
+3. Timeout Time for Nine Games
+```{r}
+#Game 1
+game <- unique(mydata$GameID)
+g1 <- data_new[which(data_new$GameID==game[1]),]
+g1 <- g1[which(g1$s1 !="NA"),]
+dim(g1)
+g1$team1 <- as.numeric(as.character(g1$s1)) - as.numeric(as.character(g1$s2))
+g1$team2 <- as.numeric(as.character(g1$s2)) - as.numeric(as.character(g1$s1))
+g1$team1[which(g1$team1 < 0)] = 0
+g1$team2[which(g1$team2 < 0)] = 0
+g11 <- p[which(p$GameID==game[1]),]
+dim(g11)
+g1_1 <- g11[which(g11$time_out1==1),]
+g1_2 <- g11[which(g11$time_out2==1),]
+
+#Game 2
+g2 <- data_new[which(data_new$GameID==game[2]),]
+g2 <- g2[which(g2$s1 !="NA"),]
+dim(g2)
+g2$team1 <- as.numeric(as.character(g2$s1)) - as.numeric(as.character(g2$s2))
+g2$team2 <- as.numeric(as.character(g2$s2)) - as.numeric(as.character(g2$s1))
+g2$team1[which(g2$team1 < 0)] = 0
+g2$team2[which(g2$team2 < 0)] = 0
+g22 <- p[which(p$GameID==game[2]),]
+dim(g22)
+g2_1 <- g22[which(g22$time_out1==1),]
+g2_2 <- g22[which(g22$time_out2==1),]
+
+#Game 3
+g3 <- data_new[which(data_new$GameID==game[3]),]
+g3 <- g3[which(g3$s1 !="NA"),]
+dim(g3)
+g3$team1 <- as.numeric(as.character(g3$s1)) - as.numeric(as.character(g3$s2))
+g3$team2 <- as.numeric(as.character(g3$s2)) - as.numeric(as.character(g3$s1))
+g3$team1[which(g3$team1 < 0)] = 0
+g3$team2[which(g3$team2 < 0)] = 0
+g33 <- p[which(p$GameID==game[3]),]
+dim(g33)
+g3_1 <- g33[which(g33$time_out1==1),]
+g3_2 <- g33[which(g33$time_out2==1),]
+
+#Game 4
+g4 <- data_new[which(data_new$GameID==game[4]),]
+g4 <- g4[which(g4$s1 !="NA"),]
+dim(g4)
+g4$team1 <- as.numeric(as.character(g4$s1)) - as.numeric(as.character(g4$s2))
+g4$team2 <- as.numeric(as.character(g4$s2)) - as.numeric(as.character(g4$s1))
+g4$team1[which(g4$team1 < 0)] = 0
+g4$team2[which(g4$team2 < 0)] = 0
+g44 <- p[which(p$GameID==game[4]),]
+dim(g44)
+g4_1 <- g44[which(g44$time_out1==1),]
+g4_2 <- g44[which(g44$time_out2==1),]
+
+#Game 5
+g5 <- data_new[which(data_new$GameID==game[5]),]
+g5 <- g5[which(g5$s1 !="NA"),]
+dim(g5)
+g5$team1 <- as.numeric(as.character(g5$s1)) - as.numeric(as.character(g5$s2))
+g5$team2 <- as.numeric(as.character(g5$s2)) - as.numeric(as.character(g5$s1))
+g5$team1[which(g5$team1 < 0)] = 0
+g5$team2[which(g5$team2 < 0)] = 0
+g55 <- p[which(p$GameID==game[5]),]
+dim(g55)
+g5_1 <- g55[which(g55$time_out1==1),]
+g5_2 <- g55[which(g55$time_out2==1),]
+
+#Game 6
+g6 <- data_new[which(data_new$GameID==game[6]),]
+g6 <- g6[which(g6$s1 !="NA"),]
+dim(g6)
+g6$team1 <- as.numeric(as.character(g6$s1)) - as.numeric(as.character(g6$s2))
+g6$team2 <- as.numeric(as.character(g6$s2)) - as.numeric(as.character(g6$s1))
+g6$team1[which(g6$team1 < 0)] = 0
+g6$team2[which(g6$team2 < 0)] = 0
+g66 <- p[which(p$GameID==game[6]),]
+dim(g66)
+g6_1 <- g66[which(g66$time_out1==1),]
+g6_2 <- g66[which(g66$time_out2==1),]
+
+#Game 7
+g7 <- data_new[which(data_new$GameID==game[7]),]
+g7 <- g7[which(g7$s1 !="NA"),]
+dim(g7)
+g7$team1 <- as.numeric(as.character(g7$s1)) - as.numeric(as.character(g7$s2))
+g7$team2 <- as.numeric(as.character(g7$s2)) - as.numeric(as.character(g7$s1))
+g7$team1[which(g7$team1 < 0)] = 0
+g7$team2[which(g7$team2 < 0)] = 0
+g77 <- p[which(p$GameID==game[7]),]
+dim(g77)
+g7_1 <- g77[which(g77$time_out1==1),]
+g7_2 <- g77[which(g77$time_out2==1),]
+
+#Game 8
+g8 <- data_new[which(data_new$GameID==game[8]),]
+g8 <- g8[which(g8$s1 !="NA"),]
+dim(g8)
+g8$team1 <- as.numeric(as.character(g8$s1)) - as.numeric(as.character(g8$s2))
+g8$team2 <- as.numeric(as.character(g8$s2)) - as.numeric(as.character(g8$s1))
+g8$team1[which(g8$team1 < 0)] = 0
+g8$team2[which(g8$team2 < 0)] = 0
+g88 <- p[which(p$GameID==game[8]),]
+dim(g88)
+g8_1 <- g88[which(g88$time_out1==1),]
+g8_2 <- g88[which(g88$time_out2==1),]
+
+#Game 9
+g9 <- data_new[which(data_new$GameID==game[9]),]
+g9 <- g9[which(g9$s1 !="NA"),]
+dim(g9)
+g9$team1 <- as.numeric(as.character(g9$s1)) - as.numeric(as.character(g9$s2))
+g9$team2 <- as.numeric(as.character(g9$s2)) - as.numeric(as.character(g9$s1))
+g9$team1[which(g9$team1 < 0)] = 0
+g9$team2[which(g9$team2 < 0)] = 0
+g99 <- p[which(p$GameID==game[9]),]
+dim(g99)
+g9_1 <- g99[which(g99$time_out1==1),]
+g9_2 <- g99[which(g99$time_out2==1),]
+
+#Plotting
+par(mfrow=c(2,2))
+#Plots for game 1-4
+plot(g1$team2~g1$time,type='l',col='blue',xlab="Time in Seconds",ylab = "Score Difference")
+lines(g1$team1~g1$time,col='red')
+points(abs(g1_1$diff)~abs(g1_1$time),pch=15,col="red")
+points(abs(g1_2$diff)~abs(g1_2$time),pch=15,col="blue")
+
+plot(g2$team2~g2$time,type='l',col='blue',xlab="Time in Seconds",ylab = "Score Difference")
+lines(g2$team1~g2$time,col='red')
+points(abs(g2_1$diff)~abs(g2_1$time),pch=15,col="red")
+points(abs(g2_2$diff)~abs(g2_2$time),pch=15,col="blue")
+
+plot(g3$team1~g3$time,type='l',col='blue',xlab="Time in Seconds",ylab = "Score Difference")
+lines(g3$team2~g3$time,col='red')
+points(abs(g3_1$diff)~abs(g3_1$time),pch=15,col="blue")
+points(abs(g3_2$diff)~abs(g3_2$time),pch=15,col="red")
+
+plot(g4$team1~g4$time,type='l',col='blue',xlab="Time in Seconds",ylab = "Score Difference")
+lines(g4$team2~g4$time,col='red')
+points(abs(g4_1$diff)~abs(g4_1$time),pch=15,col="blue")
+points(abs(g4_2$diff)~abs(g4_2$time),pch=15,col="red")
+
+#Plots for game 5-8
+plot(g5$team2~g5$time,type='l',col='blue',xlab="Time in Seconds",ylab = "Score Difference")
+lines(g5$team1~g5$time,col='red')
+points(abs(g5_1$diff)~abs(g5_1$time),pch=15,col="red")
+points(abs(g5_2$diff)~abs(g5_2$time),pch=15,col="blue")
+
+plot(g6$team2~g6$time,type='l',col='blue',xlab="Time in Seconds",ylab = "Score Difference")
+lines(g6$team1~g6$time,col='red')
+points(abs(g6_1$diff)~abs(g6_1$time),pch=15,col="red")
+points(abs(g6_2$diff)~abs(g6_2$time),pch=15,col="blue")
+
+plot(g7$team1~g7$time,type='l',col='blue',xlab="Time in Seconds",ylab = "Score Difference")
+lines(g7$team2~g7$time,col='red')
+points(abs(g7_1$diff)~abs(g7_1$time),pch=15,col="blue")
+points(abs(g7_2$diff)~abs(g7_2$time),pch=15,col="red")
+
+plot(g8$team2~g8$time,type='l',col='blue',xlab="Time in Seconds",ylab = "Score Difference")
+lines(g8$team1~g8$time,col='red')
+points(abs(g8_1$diff)~abs(g8_1$time),pch=15,col="red")
+points(abs(g8_2$diff)~abs(g8_2$time),pch=15,col="blue")
+```
+4.Contour Plots
+```{r,echo=FALSE}
+load("data.RData")
+```
+
+```{r}
+#Plot of the first game: 
+#x-axis is the overall score difference
+#y-axis is the comaprison of score differnce of two teams 
+#3 mins before (black) time-out and 3 mins after (red) time-out.
+BOSNYK_formal_test = formal_test[formal_test$GameID=="20111225BOSNYK",]
+plot(BOSNYK_formal_test$dif,BOSNYK_formal_test$score_before,ylim = c(-15,15),xlab = "BOSNYK absolute difference",ylab = "relative difference",type = "n")
+text(BOSNYK_formal_test$dif,BOSNYK_formal_test$score_before,c(1:16))
+par(new = TRUE)
+plot(BOSNYK_formal_test$dif,BOSNYK_formal_test$score_after,type="n", ylim = c(-15,15),col="red",xlab = "BOSNYK absolute difference",ylab = "relative difference")
+text(BOSNYK_formal_test$dif,BOSNYK_formal_test$score_after,c(1:16),col = "red")
+title("BOSNYK")
+
+#Scatter plots: short term score difference vs. overall score difference
+#for all 978 games
+par(mfrow = c(1,2))
+plot(formal_test$dif,formal_test$score_before,ylim = c(-15,15),
+     xlab="Overalll Score Difference",ylab = "Score Difference")
+title("3 minuites before the time out")
+plot(formal_test$dif,formal_test$score_after,ylim = c(-15,15),
+     xlab="Overalll Score Difference",ylab = "Score Difference")
+title("3 minuites after the time out")
+plot(formal_2min_test$dif,formal_2min_test$score_before,ylim = c(-15,15),
+     xlab="Overalll Score Difference",ylab = "Score Difference")
+title("2 minuites before the time out")
+plot(formal_2min_test$dif,formal_2min_test$score_after,ylim = c(-15,15),
+     xlab="Overalll Score Difference",ylab = "Score Difference")
+title("2 minuites after the time out")
+plot(formal_1min_test$dif,formal_1min_test$score_before,ylim = c(-15,15),
+     xlab="Overalll Score Difference",ylab = "Score Difference")
+title("1 minuites before the time out")
+plot(formal_1min_test$dif,formal_1min_test$score_after,ylim = c(-15,15),
+     xlab="Overalll Score Difference",ylab = "Score Difference")
+title("1 minuites after the time out")
+```
+
+```{r, warning=FALSE}
+#Contour plot of time-out (3 mins before timeout)
+df <- data.frame(x = formal_test$dif,y=formal_test$score_before)
+ggplot(data=df,aes(x,y)) + 
+  stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+  scale_fill_continuous(low="green",high="red") +
+  geom_smooth(method=lm,linetype=2,colour="red",se=F) + 
+  guides(alpha="none") +
+  geom_point() + labs(x="absolute difference",y="relative difference",title = "3 minuites before the time out")
+```
+Interpretation:
+1. The plot is centered at (0,0) - data can be approximated by a bivariate normal distribution: the possiblity of a time-out request with overall score ahead of the the opponent and overall score fall behind ofthe opponent is about the same. (possible reason: large sample size, and the fact that the time-out opportunity is not cumulative).
+2. The variaty of relative score difference is more spread when overall score is below 0 - when overall score is low, coaches are more likely to request a time-out. 
+3. Positive slope smooth line - a time-out is more like to be reuqested when the overall score is fall behind and the relative score difference is behind as well. 
+```{r,warning=FALSE}
+#Contour plot of time-out (3 mins after timeout)
+df <- data.frame(x = formal_test$dif,y=formal_test$score_after)
+ggplot(data=df,aes(x,y)) + 
+  stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+  scale_fill_continuous(low="green",high="red") +
+  geom_smooth(method=lm,linetype=2,colour="red",se=F) + 
+  guides(alpha="none") +
+  geom_point()+ labs(x="absolute difference",y="relative difference",title = "3 minuites after the time out")
+```
+Interpretation:
+1. This plot shows the short term result of time-out request.  
+2. The plot is centered at (0,0) - data can be approximated by a bivariate normal distribution: the possiblity of a time-out request with overall score ahead of the the opponent and overall score fall behind ofthe opponent is about the same. (possible reason: large sample size, and the fact that the time-out opportunity is not cumulative).  
+3. The result of time-out request has mean 0 with large variance - there is numerous confinding variables such as the level of competitiveness of two teams.  
+4. The smoothe line shifted from positive sloped line to negetive slope line -  the result of time-out is reflected by a positive short term score difference.  
+
+```{r,warning=FALSE}
+#Contour plot of time-out (difference between after and before)
+df <- data.frame(x = formal_test$dif,y=(formal_test$score_after-formal_test$score_before))
+ggplot(data=df,aes(x,y)) + 
+  stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+  scale_fill_continuous(low="green",high="red") +
+  geom_smooth(method=lm,linetype=2,colour="red",se=F) + 
+  guides(alpha="none") +
+  geom_point()+ labs(x="absolute difference",y="improvement",title = "Effectiveness of time-out request")
+```
+Interpretation:
+1. y-axis is calculated by the difference between "after" and "before".
+2. This plot and its negative-sloped smoothe line indicate the effectiveness of time-out request.
+```{r,warning=FALSE}
+#Contour plot of time-out (2 mins before timeout)
+df <- data.frame(x = formal_2min_test$dif,y=formal_2min_test$score_before)
+ggplot(data=df,aes(x,y)) + 
+  stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+  scale_fill_continuous(low="green",high="red") +
+  geom_smooth(method=lm,linetype=2,colour="red",se=F) + 
+  guides(alpha="none") +
+  geom_point() + labs(x="absolute difference",y="relative difference",title = "2 minuites before the time out")
+
+#Contour plot of time-out (2 mins after timeout)
+df <- data.frame(x = formal_2min_test$dif,y=formal_2min_test$score_after)
+ggplot(data=df,aes(x,y)) + 
+  stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+  scale_fill_continuous(low="green",high="red") +
+  geom_smooth(method=lm,linetype=2,colour="red",se=F) + 
+  guides(alpha="none") +
+  geom_point()+ labs(x="absolute difference",y="relative difference",title = "2 minuites after the time out")
+#Contour plot of time-out (effectiveness 2mins)
+df <- data.frame(x = formal_2min_test$dif,y=(formal_2min_test$score_after-formal_2min_test$score_before))
+ggplot(data=df,aes(x,y)) + 
+  stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+  scale_fill_continuous(low="green",high="red") +
+  geom_smooth(method=lm,linetype=2,colour="red",se=F) + 
+  guides(alpha="none") +
+  geom_point()+ labs(x="absolute difference",y="improvement",title = "2 minuites after the time out")
+
+#Contour plot of time-out (1 mins before timeout)
+df <- data.frame(x = formal_1min_test$dif,y=formal_1min_test$score_before)
+ggplot(data=df,aes(x,y)) + 
+  stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+  scale_fill_continuous(low="green",high="red") +
+  geom_smooth(method=lm,linetype=2,colour="red",se=F) + 
+  guides(alpha="none") +
+  geom_point() + labs(x="absolute difference",y="relative difference",title = "1 minuites before the time out")
+#Contour plot of time-out (1 mins after timeout)
+df <- data.frame(x = formal_1min_test$dif,y=formal_1min_test$score_after)
+ggplot(data=df,aes(x,y)) + 
+  stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+  scale_fill_continuous(low="green",high="red") +
+  geom_smooth(method=lm,linetype=2,colour="red",se=F) + 
+  guides(alpha="none") +
+  geom_point()+ labs(x="absolute difference",y="relative difference",title = "1 minuites after the time out")
+#Contour plot of time-out (1 mins improvement)
+df <- data.frame(x = formal_1min_test$dif,y=(formal_1min_test$score_after-formal_1min_test$score_before))
+ggplot(data=df,aes(x,y)) + 
+  stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+  scale_fill_continuous(low="green",high="red") +
+  geom_smooth(method=lm,linetype=2,colour="red",se=F) + 
+  guides(alpha="none") +
+  geom_point()+ labs(x="absolute difference",y="improvement",title = "1 minuites after the time out")
+```
+Interpretation:
+1. Change of plot shape - due to the change of time range from 3 mins to 1 min. Points are concentrated at y=0 and y=2 or -2.
